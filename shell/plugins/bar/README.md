@@ -153,7 +153,7 @@ Item {
 
 ## Bar properties available to widgets
 
-Widgets receive `bar` (the shell root), `moduleName` (string), and `settings` (object) injected at load time. The bar exposes:
+Widgets receive `bar` (the shell root), `moduleName` (string), `settings` (object), and `barRegion` (`"left" | "center" | "right"`, the section they sit in) injected at load time. The bar exposes:
 
 - `bar.foreground`, `bar.background`, `bar.urgent` — theme colors (live-updated)
 - `bar.fontFamily` — current monospace family

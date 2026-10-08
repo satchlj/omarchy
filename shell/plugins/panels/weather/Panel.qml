@@ -13,6 +13,10 @@ Panel {
   manageIpc: false
 
   property var anchorItem: null
+  // Centered on the bar while the widget sits in the bar's center section;
+  // moved to a side, the popup opens under its icon like the other panels.
+  // BarWidget.qml sets this from its bar section.
+  property bool centerOnBar: true
   property bool openedFromHotkey: false
 
   // The bar tracks the widget mounted in its slot — BarWidget.qml — not this
@@ -493,7 +497,7 @@ Panel {
     owner: root.barIdentity
     bar: root.bar
     open: root.opened
-    centerOnBar: true
+    centerOnBar: root.centerOnBar
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(480))
     contentHeight: panel.fittedContentHeight(weatherColumn.implicitHeight)

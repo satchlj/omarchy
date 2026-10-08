@@ -104,6 +104,7 @@ BarWidget {
     if ("bar" in target) target.bar = root.bar
     if ("settings" in target) target.settings = root.settings
     if ("anchorItem" in target) target.anchorItem = button
+    if ("centerOnBar" in target) target.centerOnBar = root.barRegion === "" || root.barRegion === "center"
     if ("hostWidget" in target) target.hostWidget = root
   }
 
@@ -112,6 +113,7 @@ BarWidget {
 
   onBarChanged: injectPanel()
   onSettingsChanged: injectPanel()
+  onBarRegionChanged: injectPanel()
 
   SystemClock {
     id: clock

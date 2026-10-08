@@ -2026,6 +2026,7 @@ Item {
 
     onActiveItemChanged: Qt.callLater(injectProps)
     onModuleSettingsChanged: injectProps()
+    onRegionChanged: injectProps()
 
     function injectProps() {
       var target = activeItem
@@ -2034,6 +2035,7 @@ Item {
         ? root : root.pluginBarApiFor(pluginApiId, moduleName, registered)
       if ("moduleName" in target) target.moduleName = moduleName
       if ("settings" in target) target.settings = moduleSettings
+      if ("barRegion" in target) target.barRegion = region
     }
 
     Component {
