@@ -1,0 +1,47 @@
+--- a/satchlj.bar/Bar.qml
++++ b/satchlj.bar/Bar.qml
+@@ -33,6 +33,11 @@
+   // Peek (hold Caps Lock): show a hidden bar above windows without reserving space.
+   property bool barPeek: false
+   readonly property bool barParked: barHidden && !barPeek
++  // rubra notch: with the notch-reserve toggle on (Super+Alt+F) a hidden top bar peeks over the black strip
++  // satchlj.notch keeps above the notch, so it draws light-on-black whatever the theme.
++  property bool notchReserve: false
++  readonly property bool notchStrip: notchReserve && barHidden && position === "top"
++  readonly property color notchStripForeground: "#e6e6e6"
+   property string home: Quickshell.env("HOME")
+   property string stateHome: home + "/.local/state"
+   property string omarchyConfigDir: home + "/.config/omarchy"
+@@ -69,7 +74,7 @@
+   property color themeContrastForeground: Color.background
+   property color transparentForeground: Color.bar.text
+   property color foreground: themeForeground
+-  property color barForeground: useTransparentForeground ? transparentForeground : themeForeground
++  property color barForeground: notchStrip ? notchStripForeground : (useTransparentForeground ? transparentForeground : themeForeground)
+   property bool foregroundAnimationEnabled: true
+   property color background: Color.bar.background
+   property color urgent: Color.bar.active
+@@ -941,12 +946,13 @@
+   Process {
+     id: barHiddenProbe
+     running: true
+-    command: ["bash", "-c", "d=$HOME/.local/state/omarchy/toggles; [[ -f $d/bar-off ]] && h=yes || h=no; [[ -f $d/bar-peek ]] && p=yes || p=no; echo $h $p"]
++    command: ["bash", "-c", "d=$HOME/.local/state/omarchy/toggles; [[ -f $d/bar-off ]] && h=yes || h=no; [[ -f $d/bar-peek ]] && p=yes || p=no; [[ -f $d/notch-reserve ]] && n=yes || n=no; echo $h $p $n"]
+     stdout: SplitParser {
+       onRead: function(line) {
+         var parts = String(line).trim().split(" ")
+         root.barHidden = parts[0] === "yes"
+         root.barPeek = parts[1] === "yes"
++        root.notchReserve = parts[2] === "yes"
+       }
+     }
+     // A flag can change again while the probe is still running (a quick
+@@ -1034,7 +1040,7 @@
+ 
+     implicitWidth: root.vertical ? root.barSize : 0
+     implicitHeight: root.vertical ? 0 : root.barSize
+-    color: root.transparent ? "transparent" : root.background
++    color: root.notchStrip ? "black" : (root.transparent ? "transparent" : root.background)
+     surfaceFormat.opaque: false
+     WlrLayershell.namespace: "omarchy-bar"
+     WlrLayershell.layer: root.barHidden ? WlrLayer.Overlay : WlrLayer.Top

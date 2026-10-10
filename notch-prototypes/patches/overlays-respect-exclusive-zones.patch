@@ -1,0 +1,52 @@
+--- a/shell/plugins/menu/Menu.qml
++++ b/shell/plugins/menu/Menu.qml
+@@ -1022,7 +1022,9 @@
+     WlrLayershell.namespace: "omarchy-menu"
+     WlrLayershell.layer: WlrLayer.Overlay
+     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+-    exclusionMode: ExclusionMode.Ignore
++    // rubra notch: respect exclusive zones so the full-screen scrim stays out of the strip the notch guard
++    // reserves (and off the bar). See notch-prototypes/README.md.
++    exclusionMode: ExclusionMode.Normal
+ 
+     // The card opens centered exactly as always. The first search keystroke
+     // or submenu move freezes the top line where it currently sits — from
+--- a/shell/plugins/clipboard/Clipboard.qml
++++ b/shell/plugins/clipboard/Clipboard.qml
+@@ -319,7 +319,9 @@
+     WlrLayershell.namespace: "omarchy-clipboard"
+     WlrLayershell.layer: WlrLayer.Overlay
+     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+-    exclusionMode: ExclusionMode.Ignore
++    // rubra notch: respect exclusive zones so the full-screen scrim stays out of the strip the notch guard
++    // reserves (and off the bar). See notch-prototypes/README.md.
++    exclusionMode: ExclusionMode.Normal
+ 
+     Rectangle {
+       anchors.fill: parent
+--- a/shell/plugins/emojis/Emojis.qml
++++ b/shell/plugins/emojis/Emojis.qml
+@@ -165,7 +165,9 @@
+     WlrLayershell.namespace: "omarchy-emojis"
+     WlrLayershell.layer: WlrLayer.Overlay
+     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+-    exclusionMode: ExclusionMode.Ignore
++    // rubra notch: respect exclusive zones so the full-screen scrim stays out of the strip the notch guard
++    // reserves (and off the bar). See notch-prototypes/README.md.
++    exclusionMode: ExclusionMode.Normal
+ 
+     Rectangle {
+       anchors.fill: parent
+--- a/shell/plugins/image-picker/ImagePicker.qml
++++ b/shell/plugins/image-picker/ImagePicker.qml
+@@ -368,7 +368,9 @@
+     WlrLayershell.namespace: "omarchy-image-selector"
+     WlrLayershell.layer: WlrLayer.Overlay
+     WlrLayershell.keyboardFocus: root.opened && root.imagesLoaded ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+-    exclusionMode: ExclusionMode.Ignore
++    // rubra notch: respect exclusive zones so the full-screen scrim stays out of the strip the notch guard
++    // reserves (and off the bar). See notch-prototypes/README.md.
++    exclusionMode: ExclusionMode.Normal
+ 
+     Rectangle {
+       anchors.fill: parent

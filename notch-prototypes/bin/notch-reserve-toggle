@@ -1,0 +1,7 @@
+#!/bin/bash
+# Super+Alt+F (rubra): toggle whether windows may use the strip beside the camera notch when the bar is hidden
+# (edge-to-edge mode). Flag: ~/.local/state/omarchy/toggles/notch-reserve. While it is set, the satchlj.notch
+# shell plugin keeps a black strip over the notch with an exclusive zone, so tiled and maximized windows start
+# below it. With the bar shown on top, the bar already covers the notch. See notch-prototypes/README.md.
+omarchy-toggle notch-reserve "${1:-toggle}"
+omarchy-shell -q satchlj.notch sync

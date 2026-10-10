@@ -1,0 +1,99 @@
+--- a/shell/plugins/panels/clock/Panel.qml
++++ b/shell/plugins/panels/clock/Panel.qml
+@@ -21,6 +21,9 @@
+   manageIpc: false
+ 
+   property var anchorItem: null
++  // Center the popup on the bar only when the widget sits in the bar's center
++  // section; elsewhere it opens under its icon like the other panels.
++  property bool centerOnBar: true
+ 
+   // The bar tracks the widget mounted in its slot — BarWidget.qml — not this
+   // nested panel. Everything the bar identifies a panel by has to be that
+@@ -241,7 +244,7 @@
+     owner: root.barIdentity
+     bar: root.bar
+     open: root.opened
+-    centerOnBar: true
++    centerOnBar: root.centerOnBar
+     focusTarget: keyCatcher
+     contentWidth: panel.fittedContentWidth(Style.space(560))
+     contentHeight: panel.fittedContentHeight(calendarColumn.implicitHeight)
+--- a/shell/plugins/panels/clock/BarWidget.qml
++++ b/shell/plugins/panels/clock/BarWidget.qml
+@@ -100,12 +100,16 @@
+     if ("bar" in target) target.bar = root.bar
+     if ("settings" in target) target.settings = root.settings
+     if ("anchorItem" in target) target.anchorItem = button
++    if ("centerOnBar" in target) target.centerOnBar = root.barRegion === "" || root.barRegion === "center"
+     if ("hostWidget" in target) target.hostWidget = root
+   }
+ 
+   implicitWidth: button.implicitWidth
+   implicitHeight: button.implicitHeight
+ 
++  // The bar section this widget sits in ("left", "center", "right"), set by the bar.
++  property string barRegion: ""
++  onBarRegionChanged: injectPanel()
+   onBarChanged: injectPanel()
+   onSettingsChanged: injectPanel()
+ 
+--- a/shell/plugins/panels/weather/Panel.qml
++++ b/shell/plugins/panels/weather/Panel.qml
+@@ -12,6 +12,9 @@
+   manageIpc: false
+ 
+   property var anchorItem: null
++  // Center the popup on the bar only when the widget sits in the bar's center
++  // section; elsewhere it opens under its icon like the other panels.
++  property bool centerOnBar: true
+   property bool openedFromHotkey: false
+ 
+   // The bar tracks the widget mounted in its slot — BarWidget.qml — not this
+@@ -492,7 +495,7 @@
+     owner: root.barIdentity
+     bar: root.bar
+     open: root.opened
+-    centerOnBar: true
++    centerOnBar: root.centerOnBar
+     focusTarget: keyCatcher
+     contentWidth: panel.fittedContentWidth(Style.space(480))
+     contentHeight: panel.fittedContentHeight(weatherColumn.implicitHeight)
+--- a/shell/plugins/panels/weather/BarWidget.qml
++++ b/shell/plugins/panels/weather/BarWidget.qml
+@@ -12,6 +12,7 @@
+     if ("bar" in target) target.bar = root.bar
+     if ("settings" in target) target.settings = root.settings
+     if ("anchorItem" in target) target.anchorItem = button
++    if ("centerOnBar" in target) target.centerOnBar = root.barRegion === "" || root.barRegion === "center"
+     if ("hostWidget" in target) target.hostWidget = root
+   }
+ 
+@@ -50,6 +51,9 @@
+   implicitWidth: button.implicitWidth
+   implicitHeight: button.implicitHeight
+ 
++  // The bar section this widget sits in ("left", "center", "right"), set by the bar.
++  property string barRegion: ""
++  onBarRegionChanged: injectPanel()
+   onBarChanged: injectPanel()
+   onSettingsChanged: injectPanel()
+ 
+--- a/shell/plugins/bar/Bar.qml
++++ b/shell/plugins/bar/Bar.qml
+@@ -1762,6 +1762,7 @@
+ 
+     onActiveItemChanged: Qt.callLater(injectProps)
+     onModuleSettingsChanged: injectProps()
++    onRegionChanged: injectProps()
+ 
+     function injectProps() {
+       var target = activeItem
+@@ -1769,6 +1770,7 @@
+       if ("bar" in target) target.bar = root
+       if ("moduleName" in target) target.moduleName = moduleName
+       if ("settings" in target) target.settings = moduleSettings
++      if ("barRegion" in target) target.barRegion = slot.region
+     }
+ 
+     Component {
