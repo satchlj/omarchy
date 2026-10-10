@@ -4,7 +4,7 @@
    // Peek (hold Caps Lock): show a hidden bar above windows without reserving space.
    property bool barPeek: false
    readonly property bool barParked: barHidden && !barPeek
-+  // rubra notch: with the notch-reserve toggle on (Super+Alt+F) a hidden top bar peeks over the black strip
++  // rubra notch: with the notch-reserve toggle on, a hidden top bar peeks over the black strip
 +  // satchlj.notch keeps above the notch, so it draws light-on-black whatever the theme.
 +  property bool notchReserve: false
 +  readonly property bool notchStrip: notchReserve && barHidden && position === "top"

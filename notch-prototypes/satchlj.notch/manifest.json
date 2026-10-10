@@ -4,7 +4,7 @@
   "name": "Notch guard",
   "version": "0.1.0",
   "author": "satchlj",
-  "description": "With the notch-reserve toggle on (Super+Alt+F), keeps windows out of the strip beside the camera notch while the bar is hidden.",
+  "description": "With the notch-reserve toggle on, keeps windows out of the strip beside the camera notch while the bar is hidden.",
   "kinds": [
     "service"
   ],

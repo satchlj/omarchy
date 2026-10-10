@@ -4,8 +4,7 @@ import Quickshell.Io
 import Quickshell.Hyprland
 import Quickshell.Wayland
 
-// Notch guard (rubra prototype, 2026-10-08). With the `notch-reserve` toggle on (Super+Alt+F,
-// notch-reserve-toggle), keeps windows out of the strip beside the camera notch: a black layer over the
+// Notch guard (rubra prototype, 2026-10-08). With the `notch-reserve` toggle on (notch-reserve-toggle), keeps windows out of the strip beside the camera notch: a black layer over the
 // notch rows with an exclusive zone, so Hyprland tiles and maximizes below it. Only needed while the
 // bar isn't covering the strip itself (hidden in edge-to-edge mode, or on another edge). Fullscreen
 // follows the toggle too: Hyprland ignores reserved areas for fullscreen windows, so while the toggle is

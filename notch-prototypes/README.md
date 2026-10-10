@@ -26,8 +26,8 @@ apply an overflow rule: a crowded right section or a long left section must not 
 ### `satchlj.notch/`, `bin/notch-reserve-toggle`, `hypr/notch-snippets.lua`: a "windows below the notch" switch
 
 - **The switch.** `notch-reserve-toggle` flips a global flag that persists across restarts:
-  `~/.local/state/omarchy/toggles/notch-reserve`. On our machine it is bound to Super+Alt+F, which takes over
-  quattro's "Full width" binding.
+  `~/.local/state/omarchy/toggles/notch-reserve`. Run it from whatever key or menu entry you like; no binding is
+  proposed.
 - **Flag off:** windows may use the strips beside the notch. This is the default.
 - **Flag on, bar not covering the strip:** the service plugin maps an empty black layer surface,
   `omarchy-notch-guard`, along the top edge. The layer is on Bottom, as tall as the cutout, and has an exclusive zone.
@@ -90,7 +90,7 @@ there? We found three options:
 - **(a) macOS-like.** Fullscreen sits below the notch, using `fullscreen_state` internal 1 and client 2, and the strip
   stays black.
 - **(b) True fullscreen under the notch.** Leave it and document it. Video is usually letterboxed there anyway.
-- **(c) A setting.** For example `[notch] windows = "beside" | "below"`, with a binding to switch it. This is what
+- **(c) A setting.** For example `[notch] windows = "beside" | "below"`. This is what
   these prototypes do, with fullscreen following the setting.
   - This matters most with quattro's "Full screen desktop" (Super+Ctrl+Alt+F: bar off and no gaps). Today that mode
     puts tiled windows under the notch.
