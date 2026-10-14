@@ -48,6 +48,26 @@ else:
 SH
 chmod +x "$stub_bin/hyprctl"
 
+saved_value() {
+  python3 - "$home_dir/.local/state/omarchy/monitor-layout" "$@" <<'PY'
+from pathlib import Path
+import sys
+with Path(sys.argv[1]).open('rb') as f:
+    assert f.readline().strip() == b'OMARCHY_MONITOR_LAYOUT_V1'
+    size = int(f.readline()); gdk = f.readline().decode().strip()
+    f.read(size); assert f.read(1) == b'\n'
+    rows = {r[0]:r for r in (line.decode().strip().split('\t') for line in f)}
+if sys.argv[2] == 'gdk': print(gdk)
+else: print(rows[sys.argv[2]][int(sys.argv[3])])
+PY
+}
+assert_saved_scale() {
+  [[ $(saved_value "$1" 3) == "$2" ]] || fail "managed scale for $1 is $2"
+}
+assert_saved_gdk() {
+  [[ $(saved_value gdk) == "$1" ]] || fail "managed GDK scale is $1"
+}
+
 write_monitor_config() {
   cat >"$monitor_lua" <<'LUA'
 local omarchy_gdk_scale = 2
@@ -69,27 +89,27 @@ run_scaling() {
 write_monitor_config
 OMARCHY_TEST_MONITOR_SCALE=2 run_scaling up
 grep -F 'scale = 2.5' "$eval_out" >/dev/null || fail "monitor scaling up reaches 2.5x"
-grep -Fx 'local omarchy_monitor_scale = 2.5' "$monitor_lua" >/dev/null || fail "monitor scaling up persists 2.5x"
+assert_saved_scale eDP-1 2.5 || fail "monitor scaling up persists 2.5x"
 grep -F $'requested=up\tcurrent=2\tnew=2.5\tmonitor=eDP-1' "$scale_log" >/dev/null || fail "monitor scaling up writes audit log"
 pass "monitor scaling up reaches 2.5x"
 
 write_monitor_config
 OMARCHY_TEST_MONITOR_SCALE=3 run_scaling down
 grep -F 'scale = 2.5' "$eval_out" >/dev/null || fail "monitor scaling down recovers 3x to 2.5x"
-grep -Fx 'local omarchy_monitor_scale = 2.5' "$monitor_lua" >/dev/null || fail "monitor scaling down persists 2.5x from 3x"
+assert_saved_scale eDP-1 2.5 || fail "monitor scaling down persists 2.5x from 3x"
 pass "monitor scaling down recovers 3x to 2.5x"
 
 write_monitor_config
 OMARCHY_TEST_MONITOR_SCALE=3.0000000000000004 run_scaling down
 grep -F 'scale = 2.5' "$eval_out" >/dev/null || fail "monitor scaling down snaps floating point 3x to 2.5x"
-grep -Fx 'local omarchy_monitor_scale = 2.5' "$monitor_lua" >/dev/null || fail "monitor scaling down persists 2.5x from floating point 3x"
+assert_saved_scale eDP-1 2.5 || fail "monitor scaling down persists 2.5x from floating point 3x"
 pass "monitor scaling down snaps floating point 3x to 2.5x"
 
 write_monitor_config
 OMARCHY_TEST_MONITOR_SCALE=2 run_scaling 3
 grep -F 'scale = 3' "$eval_out" >/dev/null || fail "monitor scaling explicit 3x remains available"
-grep -Fx 'local omarchy_monitor_scale = 3' "$monitor_lua" >/dev/null || fail "monitor scaling explicit 3x persists"
-grep -Fx 'local omarchy_gdk_scale = 3' "$monitor_lua" >/dev/null || fail "monitor scaling explicit 3x persists GDK scale"
+assert_saved_scale eDP-1 3 || fail "monitor scaling explicit 3x persists"
+assert_saved_gdk 3 || fail "monitor scaling explicit 3x persists GDK scale"
 pass "monitor scaling explicit 3x remains available"
 
 # GTK only honors integer GDK_SCALE, so fractional monitor scales persist a
@@ -97,14 +117,14 @@ pass "monitor scaling explicit 3x remains available"
 write_monitor_config
 OMARCHY_TEST_MONITOR_SCALE=2 run_scaling 1.6
 grep -F 'scale = 1.6' "$eval_out" >/dev/null || fail "monitor scaling explicit 1.6x remains available"
-grep -Fx 'local omarchy_monitor_scale = 1.6' "$monitor_lua" >/dev/null || fail "monitor scaling explicit 1.6x persists"
-grep -Fx 'local omarchy_gdk_scale = 2' "$monitor_lua" >/dev/null || fail "monitor scaling 1.6x persists integer GDK scale 2"
+assert_saved_scale eDP-1 1.6 || fail "monitor scaling explicit 1.6x persists"
+assert_saved_gdk 2 || fail "monitor scaling 1.6x persists integer GDK scale 2"
 pass "monitor scaling 1.6x persists integer GDK scale 2"
 
 write_monitor_config
 OMARCHY_TEST_MONITOR_SCALE=2 run_scaling 1.25
-grep -Fx 'local omarchy_monitor_scale = 1.25' "$monitor_lua" >/dev/null || fail "monitor scaling explicit 1.25x persists"
-grep -Fx 'local omarchy_gdk_scale = 1' "$monitor_lua" >/dev/null || fail "monitor scaling 1.25x persists integer GDK scale 1"
+assert_saved_scale eDP-1 1.25 || fail "monitor scaling explicit 1.25x persists"
+assert_saved_gdk 1 || fail "monitor scaling 1.25x persists integer GDK scale 1"
 pass "monitor scaling 1.25x persists integer GDK scale 1"
 
 scale=$(OMARCHY_TEST_MONITOR_SCALE=3 run_scaling)
@@ -119,7 +139,7 @@ pass "monitor scaling reports the actual non-preset scale"
 write_monitor_config
 OMARCHY_TEST_MONITOR_SCALE=2 OMARCHY_TEST_MONITOR_WIDTH=1280 OMARCHY_TEST_MONITOR_HEIGHT=800 run_scaling 3
 grep -F 'scale = 3.2' "$eval_out" >/dev/null || fail "monitor scaling approximates explicit 3x as 3.2x"
-grep -Fx 'local omarchy_monitor_scale = 3.2' "$monitor_lua" >/dev/null ||
+assert_saved_scale eDP-1 3.2 ||
   fail "monitor scaling persists approximated 3.2x"
 pass "monitor scaling approximates explicit 3x as 3.2x"
 
@@ -147,7 +167,7 @@ pass "monitor scaling accepts displayed approximate values"
 write_monitor_config
 OMARCHY_TEST_MONITOR_SCALE=4 OMARCHY_TEST_MONITOR_WIDTH=1280 OMARCHY_TEST_MONITOR_HEIGHT=804 run_scaling down
 grep -F 'scale = 2' "$eval_out" >/dev/null || fail "monitor scaling down skips duplicate 4x approximation"
-grep -Fx 'local omarchy_monitor_scale = 2' "$monitor_lua" >/dev/null ||
+assert_saved_scale eDP-1 2 ||
   fail "monitor scaling down persists 2x after skipping duplicate approximation"
 pass "monitor scaling down skips duplicate approximation"
 
@@ -171,13 +191,13 @@ grep -F 'output = "DP-1"' "$eval_out" >/dev/null || fail "monitor scaling --moni
 grep -F 'scale = 3.2' "$eval_out" >/dev/null || fail "monitor scaling --monitor cleans the scale for the named monitor"
 grep -Fx 'local omarchy_monitor_scale = 2' "$monitor_lua" >/dev/null || fail "monitor scaling --monitor leaves the catch-all scale alone"
 grep -Fx 'local omarchy_gdk_scale = 2' "$monitor_lua" >/dev/null || fail "monitor scaling --monitor leaves GDK scale alone"
-grep -F 'output = "DP-1", mode = "preferred", position = "1440x0", scale = 3.2' "$monitor_lua" >/dev/null ||
+assert_saved_scale DP-1 3.2 ||
   fail "monitor scaling --monitor adds a rule after the catch-all" "$(cat "$monitor_lua")"
 pass "monitor scaling --monitor persists a per-monitor rule"
 
 OMARCHY_TEST_MONITORS_JSON="$two_monitors" run_scaling --monitor DP-1 2
-[[ $(grep -c 'output = "DP-1"' "$monitor_lua") == 1 ]] || fail "monitor scaling updates an existing rule instead of adding another"
-grep -F 'output = "DP-1", mode = "preferred", position = "1440x0", scale = 2' "$monitor_lua" >/dev/null ||
+[[ $(saved_value DP-1 0) == DP-1 ]] || fail "monitor scaling updates an existing rule instead of adding another"
+assert_saved_scale DP-1 2 ||
   fail "monitor scaling updates the existing rule's scale"
 pass "monitor scaling updates an existing per-monitor rule"
 
@@ -187,7 +207,7 @@ write_catch_all_config
 OMARCHY_TEST_MONITORS_JSON="$two_monitors" run_scaling 1.6
 grep -F 'output = "eDP-1"' "$eval_out" >/dev/null || fail "monitor scaling defaults to the focused monitor"
 grep -Fx 'local omarchy_monitor_scale = 2' "$monitor_lua" >/dev/null || fail "monitor scaling keeps the catch-all with several monitors"
-grep -F 'output = "eDP-1", mode = "preferred", position = "0x0", scale = 1.6' "$monitor_lua" >/dev/null ||
+assert_saved_scale eDP-1 1.6 ||
   fail "monitor scaling persists the focused monitor's own rule"
 pass "monitor scaling keeps multi-monitor scales independent"
 
@@ -203,7 +223,7 @@ pass "monitor scaling rejects --monitor without a name"
 write_catch_all_config
 run_scaling --monitor eDP-1 --mode 1280x720@60 1.6
 grep -F 'mode = "1280x720@60.0"' "$eval_out" >/dev/null || fail "mode change is applied with the new scale"
-grep -F 'mode = "1280x720@60"' "$monitor_lua" >/dev/null || fail "mode change persists with the scale"
+[[ $(saved_value eDP-1 1) == "1280x720@60" ]] || fail "mode change persists with the scale"
 pass "monitor mode changes use the same layout planner"
 
 before=$(cat "$monitor_lua")

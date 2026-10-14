@@ -132,133 +132,102 @@ assert layout.rewrite(text_desc, result, "DP-1").count('desc:Dell') == 1
 assert 'output = "DP-1"' not in layout.rewrite(text_desc, result, "DP-1")
 pass_test("description rules update instead of gaining shadow rules")
 
-# Exercise transactional apply without a compositor. Check live eval/readback,
-# resolved symlink publication, mode/permission retention and failure rollback.
-with tempfile.TemporaryDirectory() as directory:
+# Test publication without touching owner files or suppressing config watches.
+with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"XDG_STATE_HOME": directory, "XDG_RUNTIME_DIR": directory}):
   path = Path(directory) / "real.lua"
   link = Path(directory) / "monitors.lua"
   path.write_text(text)
   path.chmod(0o640)
   link.symlink_to(path)
+  original = path.read_bytes()
   calls = []
   desired = layout.plan(rubra, "DP-1", 2)
   def run(args, **kwargs):
     calls.append(args)
-    return subprocess.CompletedProcess(args, 0, json.dumps(desired) if args[1] == "monitors" else "ok\n", "")
+    assert kwargs["timeout"] == 10
+    out = json.dumps({"bool": False}) if args[1] == "getoption" else json.dumps(desired) if args[1] == "monitors" else "ok"
+    return subprocess.CompletedProcess(args, 0, out, "")
   with patch.object(layout.subprocess, "run", run):
-    assert layout.apply_guarded(rubra, "DP-1", 2, link) == 2
-  assert link.is_symlink() and path.stat().st_mode & 0o777 == 0o640
-  assert path.read_text() == layout.rewrite(text, desired, "DP-1")
-  assert len([c for c in calls if c[1] == "eval"]) == 1
-  assert len(list(path.parent.glob(".monitors-*"))) == 0
-  pass_test("apply stages and publishes once, preserves symlinks/permissions, checks live geometry")
-  original = path.read_text()
+    assert layout.apply(rubra, "DP-1", 2, link) == 2
+  saved = layout.state_path()
+  assert link.is_symlink() and path.stat().st_mode & 0o777 == 0o640 and path.read_bytes() == original
+  assert saved.read_bytes() == layout.encode_state(original, desired, "DP-1")
+  assert not any("disable_autoreload =" in c[-1] or c[1] in ("reload", "keyword") for c in calls)
+  assert not list(saved.parent.glob(".monitor-layout-*"))
+  pass_test("scale save changes only managed data; owner symlinks/bytes/modes and all config watches remain intact")
+  prior = saved.read_bytes()
+  for failure in ("eval", "snap", "publish", "timeout"):
+    calls.clear()
+    def failed(args, **kwargs):
+      response = run(args, **kwargs)
+      if args[1] == "eval" and failure == "eval": response.stdout = "error: rejected"
+      if args[1] == "monitors" and failure == "snap": response.stdout = json.dumps(rubra)
+      if args[1] == "monitors" and failure == "timeout": raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+      return response
+    def publish_fail(p, content):
+      raise OSError("injected publication failure")
+    from contextlib import nullcontext
+    publication = patch.object(layout, "publish_state", publish_fail) if failure == "publish" else nullcontext()
+    with patch.object(layout.subprocess, "run", failed), patch.object(layout.time, "sleep"), publication:
+      try:
+        layout.apply(rubra, "DP-1", 2, link)
+        raise AssertionError("expected failure")
+      except (ValueError, OSError, subprocess.SubprocessError):
+        pass
+    assert path.read_bytes() == original and saved.read_bytes() == prior
+    assert calls[-1][1] == "reload"
+    pass_test(f"{failure} failure preserves owner/saved bytes and performs bounded current-config recovery")
+  owner = original + b"-- owner publication-boundary edit\n"
+  replace = layout.os.replace
+  def concurrent(src, dst):
+    path.write_bytes(owner)
+    replace(src, dst)
   calls.clear()
-  def rejected(args, **kwargs):
-    calls.append(args)
-    return subprocess.CompletedProcess(args, 0, "error: invalid rule" if len(calls) == 1 else "ok", "")
-  with patch.object(layout.subprocess, "run", rejected):
+  with patch.object(layout.subprocess, "run", run), patch.object(layout.os, "replace", concurrent):
     try:
-      layout.apply_guarded(rubra, "DP-1", 2, link)
-      raise AssertionError("expected eval failure")
+      layout.apply(rubra, "DP-1", 2, link)
+      raise AssertionError("expected owner-edit conflict")
     except ValueError:
       pass
-  assert path.read_text() == original and len(calls) == 2
-  assert not list(path.parent.glob(".monitors-*"))
-  pass_test("eval rejection preserves config and restores old live rules")
-  def snapped(args, **kwargs):
-    calls.append(args)
-    return subprocess.CompletedProcess(args, 0, json.dumps(rubra) if args[1] == "monitors" else "ok", "")
+  assert path.read_bytes() == owner and saved.read_bytes() == prior and calls[-1][1] == "reload"
+  pass_test("publication-boundary owner save is preserved and reloaded; no success or overwrite")
+  path.write_bytes(original)
   calls.clear()
-  with patch.object(layout.subprocess, "run", snapped), patch.object(layout.time, "sleep"):
-    try:
-      layout.apply_guarded(rubra, "DP-1", 2, link)
-      raise AssertionError("expected readback failure")
-    except ValueError:
-      pass
-  assert path.read_text() == original and calls[-1][1] == "eval"
-  pass_test("snapped geometry is not persisted and old live rules are restored")
-  calls.clear()
-  with patch.object(layout.subprocess, "run", run), patch.object(layout.os, "replace", side_effect=OSError("injected rename failure")):
-    try:
-      layout.apply_guarded(rubra, "DP-1", 2, link)
-      raise AssertionError("expected publication failure")
-    except OSError:
-      pass
-  assert path.read_text() == original and len([c for c in calls if c[1] == "eval"]) == 2
-  assert not list(path.parent.glob(".monitors-*"))
-  pass_test("failed publication keeps config bytes and rolls live layout back")
-  calls.clear()
-  def concurrent(args, **kwargs):
+  def before_save(args, **kwargs):
     response = run(args, **kwargs)
-    if args[1] == "monitors":
-      path.write_text(original + "-- concurrent owner edit\n")
+    if args[1] == "monitors": path.write_bytes(owner)
     return response
-  with patch.object(layout.subprocess, "run", concurrent):
-    try:
-      layout.apply_guarded(rubra, "DP-1", 2, link)
-      raise AssertionError("expected concurrent-edit refusal")
-    except ValueError:
-      pass
-  assert path.read_text() == original + "-- concurrent owner edit\n"
-  assert len([c for c in calls if c[1] == "eval"]) == 2
-  pass_test("concurrent owner edit is retained and old live layout restored")
-
-# Exercise the public entry point's watch barrier independently of geometry mocks.
-with tempfile.TemporaryDirectory() as runtime, patch.dict(os.environ, {"XDG_RUNTIME_DIR": runtime}):
-  calls = []
-  def guarded_run(args, **kwargs):
-    calls.append(args)
-    if args[1] == "getoption":
-      return subprocess.CompletedProcess(args, 0, json.dumps({"bool": False}), "")
-    return subprocess.CompletedProcess(args, 0, "ok", "")
-  with patch.object(layout.subprocess, "run", guarded_run), patch.object(layout, "apply_guarded", return_value=2) as body:
-    assert layout.apply(rubra, "DP-1", 2, "unused") == 2
-    body.assert_called_once()
-  assert "disable_autoreload = true" in calls[2][2]
-  assert "disable_autoreload = false" in calls[-1][2]
-  assert all("exec_scheduled_prop_refresh_immediately()" in c[2] for c in (calls[2], calls[-1]))
-  assert not any(c[1] in ("reload", "keyword") for c in calls)
-  pass_test("persistence removes/restores watches synchronously without a full reload")
-  calls.clear()
-  with patch.object(layout.subprocess, "run", guarded_run), patch.object(layout, "apply_guarded", side_effect=OSError("publication failure")):
-    try:
-      layout.apply(rubra, "DP-1", 2, "unused")
-      raise AssertionError("expected failure")
-    except OSError:
-      pass
-  assert "disable_autoreload = false" in calls[-1][2]
-  pass_test("failed layout publication restores the previous auto-reload setting")
-  def already_paused(args, **kwargs):
-    response = guarded_run(args, **kwargs)
-    if args[1] == "getoption":
-      response.stdout = json.dumps({"bool": True})
+  with patch.object(layout.subprocess, "run", before_save):
+    try: layout.apply(rubra, "DP-1", 2, link)
+    except ValueError: pass
+    else: raise AssertionError("expected conflict")
+  assert path.read_bytes() == owner and calls[-1][1] == "reload" and saved.read_bytes() == prior
+  pass_test("prepublication owner edit retains normal watches and exceptional reload recovery")
+  path.write_bytes(original)
+  def disabled(args, **kwargs):
+    response = before_save(args, **kwargs)
+    if args[1] == "getoption": response.stdout = json.dumps({"bool": True})
     return response
   calls.clear()
-  with patch.object(layout.subprocess, "run", already_paused), patch.object(layout, "apply_guarded", return_value=2):
-    layout.apply(rubra, "DP-1", 2, "unused")
-  assert "disable_autoreload = true" in calls[-1][2]
-  pass_test("an already-disabled auto-reload setting is preserved")
+  with patch.object(layout.subprocess, "run", disabled):
+    try: layout.apply(rubra, "DP-1", 2, link)
+    except ValueError: pass
+    else: raise AssertionError("expected conflict")
+  assert path.read_bytes() == owner and not any(c[1] == "reload" for c in calls)
+  assert not any("disable_autoreload =" in c[-1] for c in calls)
+  pass_test("pre-existing disabled-auto-reload policy is preserved on conflict")
+  path.write_bytes(original)
+  unrelated = Path(directory) / "input.lua"
+  unrelated.write_text("-- old input config\n")
   calls.clear()
-  def missing_barrier(args, **kwargs):
-    calls.append(args)
-    return subprocess.CompletedProcess(args, 0, "error: omarchy-no-refresh-barrier", "")
-  with patch.object(layout.subprocess, "run", missing_barrier), patch.object(layout, "apply_guarded", return_value=2):
-    layout.apply(rubra, "DP-1", 2, "unused")
-  assert len(calls) == 1
-  pass_test("older Lua builds retain persistence without unsafe watch timing assumptions")
-  calls.clear()
-  def restore_failure(args, **kwargs):
-    response = guarded_run(args, **kwargs)
-    if "disable_autoreload = false" in args[-1]:
-      response.stdout = "error: injected restore failure"
+  def unrelated_edit(args, **kwargs):
+    response = run(args, **kwargs)
+    if args[1] == "monitors": unrelated.write_text("-- owner input edit\n")
     return response
-  with patch.object(layout.subprocess, "run", restore_failure), patch.object(layout, "apply_guarded", return_value=2):
-    try:
-      layout.apply(rubra, "DP-1", 2, "unused")
-      raise AssertionError("expected restore failure")
-    except ValueError:
-      pass
-  pass_test("watch restoration failure is reported instead of returning success")
+  with patch.object(layout.subprocess, "run", unrelated_edit):
+    layout.apply(rubra, "DP-1", 2, link)
+  assert unrelated.read_text() == "-- owner input edit\n" and path.read_bytes() == original
+  assert not any("disable_autoreload =" in c[-1] or c[1] == "reload" for c in calls)
+  pass_test("unrelated owner config edits retain their normal watch events; helper performs no watch suppression")
 
 PY

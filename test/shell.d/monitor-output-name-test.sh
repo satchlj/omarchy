@@ -13,7 +13,8 @@ stub_dir="$tmpdir/bin"
 home_dir="$tmpdir/home"
 monitors_json="$tmpdir/monitors.json"
 flag_dir="$home_dir/.local/state/omarchy/toggles/hypr"
-mkdir -p "$stub_dir" "$flag_dir"
+mkdir -p "$stub_dir" "$flag_dir" "$home_dir/.config/hypr"
+: > "$home_dir/.config/hypr/monitors.lua"
 
 make_stub() {
   local name=$1

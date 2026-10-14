@@ -17,9 +17,9 @@ usage() {
 # The monitor to act on: the one named with --monitor, else the focused one.
 target_monitor_info() {
   if [[ -n $TARGET_MONITOR ]]; then
-    hyprctl monitors -j | jq -e -c --arg name "$TARGET_MONITOR" '.[] | select(.name == $name)'
+    timeout --kill-after=2 10 hyprctl monitors -j | jq -e -c --arg name "$TARGET_MONITOR" '.[] | select(.name == $name)'
   else
-    hyprctl monitors -j | jq -e -c '.[] | select(.focused == true)'
+    timeout --kill-after=2 10 hyprctl monitors -j | jq -e -c '.[] | select(.focused == true)'
   fi
 }
 
@@ -71,7 +71,7 @@ set_scale() {
   local requested_scale="$1"
   local requested="${2:-$requested_scale}"
   local monitors_json monitor_info active_monitor current_scale new_scale
-  monitors_json=$(hyprctl monitors -j) || return 1
+  monitors_json=$(timeout --kill-after=2 10 hyprctl monitors -j) || return 1
   monitor_info=$(jq -e -c --arg name "$TARGET_MONITOR" \
     '.[] | select(if $name == "" then .focused == true else .name == $name end)' <<<"$monitors_json") || return 1
   active_monitor=$(jq -r '.name' <<<"$monitor_info")

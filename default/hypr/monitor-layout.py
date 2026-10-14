@@ -12,9 +12,9 @@ import math
 import os
 from pathlib import Path
 import re
-import shutil
 import time
 import subprocess
+import signal
 import sys
 import tempfile
 
@@ -237,81 +237,126 @@ def lua_rules(displays):
   return "; ".join(f'hl.monitor({{ output = {json.dumps(m["name"])}, mode = "{m["width"]}x{m["height"]}@{m["refreshRate"]}", position = "{m["x"]}x{m["y"]}", scale = {m["scale"]:g}, transform = {m.get("transform", 0)} }})' for m in displays)
 
 
-def hypr_eval(code):
-  result = subprocess.run(["hyprctl", "eval", code], capture_output=True, text=True, timeout=10)
-  if result.returncode or result.stdout.strip() not in ("", "ok"):
-    raise ValueError("Hyprland rejected auto-reload guard: " + result.stdout.strip() + result.stderr.strip())
+IPC_TIMEOUT = 10
 
 
-def set_autoreload(disabled):
-  # Lua hl.config schedules a property refresh. Flush it in this same IPC request
-  # so all file watches are removed/restored before the client touches config.
-  hypr_eval('hl.config({ misc = { disable_autoreload = ' + str(disabled).lower() +
-            ' } }); hl.exec_scheduled_prop_refresh_immediately()')
+class Terminated(Exception):
+  def __init__(self, signum):
+    self.signum = signum
+    super().__init__(f"terminated by signal {signum}")
 
 
 @contextmanager
-def without_autoreload():
-  # Serialize scaling calls for this session so one cannot re-enable watches
-  # while another is still publishing. Keep the lock outside watched config dirs.
-  runtime = Path(os.environ.get("XDG_RUNTIME_DIR", tempfile.gettempdir()))
-  lock_path = runtime / f"omarchy-monitor-layout-{os.getuid()}.lock"
-  fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-  with os.fdopen(fd, "w") as lock:
+def termination_handlers():
+  def terminate(signum, frame):
+    raise Terminated(signum)
+  previous = {n: signal.signal(n, terminate) for n in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+  try:
+    yield
+  finally:
+    for n, handler in previous.items():
+      signal.signal(n, handler)
+
+
+_finishing = False
+
+
+@contextmanager
+def finish_cleanup():
+  # Catchable signals during cleanup are deferred until all bounded recovery and
+  # temporary-file operations finish. A second TERM must not cut cleanup short.
+  global _finishing
+  if _finishing:
+    yield
+    return
+  _finishing = True
+  pending = []
+  previous = {n: signal.signal(n, lambda signum, frame: pending.append(signum))
+              for n in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+  try:
+    yield
+  finally:
+    for n, handler in previous.items():
+      signal.signal(n, handler)
+    _finishing = False
+    if pending:
+      raise Terminated(pending[0])
+
+
+def ipc(*args, check=False):
+  return subprocess.run(["hyprctl", *args], capture_output=True, text=True,
+                        check=check, timeout=IPC_TIMEOUT)
+
+
+def hypr_eval(code):
+  result = ipc("eval", code)
+  if result.returncode or result.stdout.strip() not in ("", "ok"):
+    raise ValueError("Hyprland rejected layout: " + result.stdout.strip() + result.stderr.strip())
+
+
+@contextmanager
+def layout_transaction():
+  # This lock only serializes managed-state writers. Owner config and Hyprland's
+  # watches are never changed, so independent editors need not take the lock.
+  runtime = Path(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir())
+  fd = os.open(runtime / f"omarchy-monitor-layout-{os.getuid()}.lock",
+               os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+  with termination_handlers(), os.fdopen(fd, "w") as lock:
     fcntl.flock(lock, fcntl.LOCK_EX)
-    probe = subprocess.run(["hyprctl", "eval",
-      'assert(type(hl.exec_scheduled_prop_refresh_immediately) == "function", "omarchy-no-refresh-barrier")'],
-      capture_output=True, text=True, timeout=10)
-    if "omarchy-no-refresh-barrier" in probe.stdout:
-      # Older Lua builds lack a synchronous watch barrier; retain their existing
-      # persistence behavior instead of guessing with a sleep or disabling reload.
-      yield
-      return
-    if probe.returncode or probe.stdout.strip() not in ("", "ok"):
-      raise ValueError("Could not check Hyprland auto-reload capability")
-    option = subprocess.run(["hyprctl", "getoption", "misc.disable_autoreload", "-j"],
-                            capture_output=True, text=True, check=True, timeout=10)
-    previous = json.loads(option.stdout).get("bool")
-    if not isinstance(previous, bool):
-      raise ValueError("Could not read previous Hyprland auto-reload setting")
+    yield
+
+
+def state_path():
+  return Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "omarchy/monitor-layout"
+
+
+def encode_state(original, displays, name):
+  # Framed data, never executable Lua. Preserve the owner file's exact bytes;
+  # the loader ignores this state when those bytes differ after an owner edit.
+  gdk = str(rounded(displays[0]["scale"])) if len(displays) == 1 and b"omarchy_gdk_scale" in original else "-"
+  rows = ["\t".join((m["name"], f'{m["width"]}x{m["height"]}@{m["refreshRate"]:g}',
+                       f'{m["x"]}x{m["y"]}', f'{m["scale"]:g}', str(m.get("transform", 0)))) for m in displays]
+  return f"OMARCHY_MONITOR_LAYOUT_V1\n{len(original)}\n{gdk}\n".encode() + original + b"\n" + ("\n".join(rows) + "\n").encode()
+
+
+def publish_state(path, content):
+  with finish_cleanup():
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, staged = tempfile.mkstemp(prefix=".monitor-layout-", dir=path.parent)
     try:
-      set_autoreload(True)
-      yield
+      with os.fdopen(fd, "wb") as handle:
+        handle.write(content)
+      os.replace(staged, path)
     finally:
-      set_autoreload(previous)
+      if os.path.exists(staged):
+        os.unlink(staged)
 
 
 def apply(monitors, name, scale, config, mode=None):
-  plan(monitors, name, scale, mode)  # Reject unsafe/invalid requests before any IPC.
-  with without_autoreload():
+  plan(monitors, name, scale, mode)  # Refuse unsafe input before IPC or state writes.
+  with layout_transaction():
     return apply_guarded(monitors, name, scale, config, mode)
 
 
 def apply_guarded(monitors, name, scale, config, mode=None):
   displays = plan(monitors, name, scale, mode)
-  # Resolve symlinks and replace once while file watches are paused. Stage
-  # before changing live state; restore watches after cleanup and rollback.
   path = Path(config).resolve()
-  staged = None
+  original = path.read_bytes()
+  if len(original) > 1048576 or len(displays) > 256:
+    raise ValueError("Monitor state exceeds supported size")
+  saved = state_path()
+  prior = saved.read_bytes() if saved.exists() else None
+  option = ipc("getoption", "misc.disable_autoreload", "-j", check=True)
+  disabled = json.loads(option.stdout).get("bool")
+  if not isinstance(disabled, bool):
+    raise ValueError("Could not read Hyprland auto-reload policy")
   changed_live = False
-  original = path.read_text() if path.exists() else None
+  publishing = False
   try:
-    if original is not None:
-      content = rewrite(original, displays, name, mode)
-      fd, staged = tempfile.mkstemp(prefix=".monitors-", dir=path.parent)
-      with os.fdopen(fd, "w") as handle:
-        handle.write(content)
-      shutil.copystat(path, staged)
-      attributes = path.stat()
-      os.chown(staged, attributes.st_uid, attributes.st_gid)
     changed_live = True
-    result = subprocess.run(["hyprctl", "eval", lua_rules(displays)], capture_output=True, text=True)
-    if result.returncode or result.stdout.strip() not in ("", "ok"):
-      raise ValueError("Hyprland rejected layout: " + result.stdout.strip() + result.stderr.strip())
-    # A successful eval can still snap an unavailable mode/scale. Never save
-    # geometry computed for a rectangle the compositor did not actually use.
+    hypr_eval(lua_rules(displays))
     for attempt in range(10):
-      readback = subprocess.run(["hyprctl", "monitors", "-j"], capture_output=True, text=True, check=True)
+      readback = ipc("monitors", "-j", check=True)
       actual = {m["name"]: m for m in json.loads(readback.stdout) if active(m)}
       if all(m["name"] in actual and rect(actual[m["name"]]) == rect(m)
              and abs(actual[m["name"]]["scale"] - m["scale"]) < 0.0001
@@ -322,26 +367,53 @@ def apply_guarded(monitors, name, scale, config, mode=None):
       time.sleep(0.05)
     else:
       raise ValueError("Compositor geometry differs from requested layout")
-    if staged:
-      if path.read_text() != original:
-        raise ValueError("Monitor config changed concurrently; retry")
-      os.replace(staged, path)
-      staged = None
+    if path.read_bytes() != original:
+      raise ValueError("Owner monitor config changed; scale save cancelled")
+    # Only helper-owned state is replaced. An owner save at this very boundary
+    # cannot be overwritten: the owner file is never a replacement destination.
+    publishing = True
+    publish_state(saved, encode_state(original, displays, name))
+    if path.read_bytes() != original:
+      raise ValueError("Owner monitor config changed during publication; scale save cancelled")
   except Exception:
-    if changed_live:
-      rollback = subprocess.run(["hyprctl", "eval", lua_rules([m for m in monitors if active(m)])], capture_output=True, text=True)
-      if rollback.returncode or rollback.stdout.strip() not in ("", "ok"):
-        print("Warning: could not restore the old live layout", file=sys.stderr)
+    with finish_cleanup():
+      recovery_failed = False
+      if publishing:
+        try:
+          if prior is None:
+            saved.unlink(missing_ok=True)
+          else:
+            publish_state(saved, prior)
+        except OSError as error:
+          recovery_failed = True
+          print(f"Could not restore saved monitor state: {error}; remove {saved} before reloading", file=sys.stderr)
+      if changed_live:
+        try:
+          if disabled:
+            # Respect an intentional disabled-auto-reload policy. No full reload
+            # is introduced; the owner file is retained for their explicit reload.
+            hypr_eval(lua_rules([m for m in monitors if active(m)]))
+            print("Scale save cancelled; prior auto-reload-disabled policy preserved; owner edits await explicit reload", file=sys.stderr)
+          else:
+            result = ipc("reload")
+            if result.returncode or result.stdout.strip() not in ("", "ok"):
+              raise ValueError(result.stdout.strip() + result.stderr.strip())
+            print("Scale save cancelled; reloaded current owner configuration", file=sys.stderr)
+        except (ValueError, OSError, subprocess.SubprocessError) as error:
+          recovery_failed = True
+          print(f"Monitor recovery failed: {error}; inspect {saved}, then run hyprctl reload when the compositor responds", file=sys.stderr)
+      if recovery_failed:
+        print("Monitor recovery incomplete; no success reported", file=sys.stderr)
     raise
-  finally:
-    if staged:
-      os.unlink(staged)
   return next(m["scale"] for m in displays if m["name"] == name)
 
 
 if __name__ == "__main__":
   try:
     print(f'{apply(json.load(sys.stdin), sys.argv[1], float(sys.argv[2]), sys.argv[3], sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else None):g}')
+  except Terminated as error:
+    print(f"Monitor layout change interrupted: {error}", file=sys.stderr)
+    sys.exit(128 + error.signum)
   except (ValueError, KeyError, OSError, TypeError, subprocess.SubprocessError) as error:
     print(f"Monitor layout change failed: {error}", file=sys.stderr)
     sys.exit(1)

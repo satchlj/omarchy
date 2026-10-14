@@ -21,3 +21,6 @@ disabled_input_device("touchpad")
 disabled_input_device("touchscreen")
 
 require("default.hypr.workspace-layouts")
+
+-- Saved display-panel layouts are data read outside the config watch set.
+require("default.hypr.monitor-layout-state").apply()
