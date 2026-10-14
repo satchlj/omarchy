@@ -30,7 +30,12 @@ if sys.argv[1] == "monitors":
       "width": int(os.environ.get("OMARCHY_TEST_MONITOR_WIDTH", 2880)),
       "height": int(os.environ.get("OMARCHY_TEST_MONITOR_HEIGHT", 1800)),
       "refreshRate": 120.0}]))
+elif sys.argv[1] == "getoption":
+  print(json.dumps({"bool": False}))
 elif sys.argv[1] == "eval":
+  if "hl.monitor(" not in sys.argv[2]:
+    print("ok")
+    sys.exit(0)
   out.write_text(sys.argv[2] + "\n")
   monitors = []
   for name, w, h, hz, x, y, scale, transform in re.findall(

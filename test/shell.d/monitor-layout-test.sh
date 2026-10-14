@@ -146,7 +146,7 @@ with tempfile.TemporaryDirectory() as directory:
     calls.append(args)
     return subprocess.CompletedProcess(args, 0, json.dumps(desired) if args[1] == "monitors" else "ok\n", "")
   with patch.object(layout.subprocess, "run", run):
-    assert layout.apply(rubra, "DP-1", 2, link) == 2
+    assert layout.apply_guarded(rubra, "DP-1", 2, link) == 2
   assert link.is_symlink() and path.stat().st_mode & 0o777 == 0o640
   assert path.read_text() == layout.rewrite(text, desired, "DP-1")
   assert len([c for c in calls if c[1] == "eval"]) == 1
@@ -159,7 +159,7 @@ with tempfile.TemporaryDirectory() as directory:
     return subprocess.CompletedProcess(args, 0, "error: invalid rule" if len(calls) == 1 else "ok", "")
   with patch.object(layout.subprocess, "run", rejected):
     try:
-      layout.apply(rubra, "DP-1", 2, link)
+      layout.apply_guarded(rubra, "DP-1", 2, link)
       raise AssertionError("expected eval failure")
     except ValueError:
       pass
@@ -172,7 +172,7 @@ with tempfile.TemporaryDirectory() as directory:
   calls.clear()
   with patch.object(layout.subprocess, "run", snapped), patch.object(layout.time, "sleep"):
     try:
-      layout.apply(rubra, "DP-1", 2, link)
+      layout.apply_guarded(rubra, "DP-1", 2, link)
       raise AssertionError("expected readback failure")
     except ValueError:
       pass
@@ -181,7 +181,7 @@ with tempfile.TemporaryDirectory() as directory:
   calls.clear()
   with patch.object(layout.subprocess, "run", run), patch.object(layout.os, "replace", side_effect=OSError("injected rename failure")):
     try:
-      layout.apply(rubra, "DP-1", 2, link)
+      layout.apply_guarded(rubra, "DP-1", 2, link)
       raise AssertionError("expected publication failure")
     except OSError:
       pass
@@ -196,12 +196,69 @@ with tempfile.TemporaryDirectory() as directory:
     return response
   with patch.object(layout.subprocess, "run", concurrent):
     try:
-      layout.apply(rubra, "DP-1", 2, link)
+      layout.apply_guarded(rubra, "DP-1", 2, link)
       raise AssertionError("expected concurrent-edit refusal")
     except ValueError:
       pass
   assert path.read_text() == original + "-- concurrent owner edit\n"
   assert len([c for c in calls if c[1] == "eval"]) == 2
   pass_test("concurrent owner edit is retained and old live layout restored")
+
+# Exercise the public entry point's watch barrier independently of geometry mocks.
+with tempfile.TemporaryDirectory() as runtime, patch.dict(os.environ, {"XDG_RUNTIME_DIR": runtime}):
+  calls = []
+  def guarded_run(args, **kwargs):
+    calls.append(args)
+    if args[1] == "getoption":
+      return subprocess.CompletedProcess(args, 0, json.dumps({"bool": False}), "")
+    return subprocess.CompletedProcess(args, 0, "ok", "")
+  with patch.object(layout.subprocess, "run", guarded_run), patch.object(layout, "apply_guarded", return_value=2) as body:
+    assert layout.apply(rubra, "DP-1", 2, "unused") == 2
+    body.assert_called_once()
+  assert "disable_autoreload = true" in calls[2][2]
+  assert "disable_autoreload = false" in calls[-1][2]
+  assert all("exec_scheduled_prop_refresh_immediately()" in c[2] for c in (calls[2], calls[-1]))
+  assert not any(c[1] in ("reload", "keyword") for c in calls)
+  pass_test("persistence removes/restores watches synchronously without a full reload")
+  calls.clear()
+  with patch.object(layout.subprocess, "run", guarded_run), patch.object(layout, "apply_guarded", side_effect=OSError("publication failure")):
+    try:
+      layout.apply(rubra, "DP-1", 2, "unused")
+      raise AssertionError("expected failure")
+    except OSError:
+      pass
+  assert "disable_autoreload = false" in calls[-1][2]
+  pass_test("failed layout publication restores the previous auto-reload setting")
+  def already_paused(args, **kwargs):
+    response = guarded_run(args, **kwargs)
+    if args[1] == "getoption":
+      response.stdout = json.dumps({"bool": True})
+    return response
+  calls.clear()
+  with patch.object(layout.subprocess, "run", already_paused), patch.object(layout, "apply_guarded", return_value=2):
+    layout.apply(rubra, "DP-1", 2, "unused")
+  assert "disable_autoreload = true" in calls[-1][2]
+  pass_test("an already-disabled auto-reload setting is preserved")
+  calls.clear()
+  def missing_barrier(args, **kwargs):
+    calls.append(args)
+    return subprocess.CompletedProcess(args, 0, "error: omarchy-no-refresh-barrier", "")
+  with patch.object(layout.subprocess, "run", missing_barrier), patch.object(layout, "apply_guarded", return_value=2):
+    layout.apply(rubra, "DP-1", 2, "unused")
+  assert len(calls) == 1
+  pass_test("older Lua builds retain persistence without unsafe watch timing assumptions")
+  calls.clear()
+  def restore_failure(args, **kwargs):
+    response = guarded_run(args, **kwargs)
+    if "disable_autoreload = false" in args[-1]:
+      response.stdout = "error: injected restore failure"
+    return response
+  with patch.object(layout.subprocess, "run", restore_failure), patch.object(layout, "apply_guarded", return_value=2):
+    try:
+      layout.apply(rubra, "DP-1", 2, "unused")
+      raise AssertionError("expected restore failure")
+    except ValueError:
+      pass
+  pass_test("watch restoration failure is reported instead of returning success")
 
 PY

@@ -4,6 +4,8 @@ Uses the shared-edge idea from PR #11854, but propagates sizes through neighbour
 and keeps edge/centre alignment rather than only moving the resized output.
 """
 
+from contextlib import contextmanager
+import fcntl
 import itertools
 import json
 import math
@@ -235,10 +237,60 @@ def lua_rules(displays):
   return "; ".join(f'hl.monitor({{ output = {json.dumps(m["name"])}, mode = "{m["width"]}x{m["height"]}@{m["refreshRate"]}", position = "{m["x"]}x{m["y"]}", scale = {m["scale"]:g}, transform = {m.get("transform", 0)} }})' for m in displays)
 
 
+def hypr_eval(code):
+  result = subprocess.run(["hyprctl", "eval", code], capture_output=True, text=True, timeout=10)
+  if result.returncode or result.stdout.strip() not in ("", "ok"):
+    raise ValueError("Hyprland rejected auto-reload guard: " + result.stdout.strip() + result.stderr.strip())
+
+
+def set_autoreload(disabled):
+  # Lua hl.config schedules a property refresh. Flush it in this same IPC request
+  # so all file watches are removed/restored before the client touches config.
+  hypr_eval('hl.config({ misc = { disable_autoreload = ' + str(disabled).lower() +
+            ' } }); hl.exec_scheduled_prop_refresh_immediately()')
+
+
+@contextmanager
+def without_autoreload():
+  # Serialize scaling calls for this session so one cannot re-enable watches
+  # while another is still publishing. Keep the lock outside watched config dirs.
+  runtime = Path(os.environ.get("XDG_RUNTIME_DIR", tempfile.gettempdir()))
+  lock_path = runtime / f"omarchy-monitor-layout-{os.getuid()}.lock"
+  fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+  with os.fdopen(fd, "w") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    probe = subprocess.run(["hyprctl", "eval",
+      'assert(type(hl.exec_scheduled_prop_refresh_immediately) == "function", "omarchy-no-refresh-barrier")'],
+      capture_output=True, text=True, timeout=10)
+    if "omarchy-no-refresh-barrier" in probe.stdout:
+      # Older Lua builds lack a synchronous watch barrier; retain their existing
+      # persistence behavior instead of guessing with a sleep or disabling reload.
+      yield
+      return
+    if probe.returncode or probe.stdout.strip() not in ("", "ok"):
+      raise ValueError("Could not check Hyprland auto-reload capability")
+    option = subprocess.run(["hyprctl", "getoption", "misc.disable_autoreload", "-j"],
+                            capture_output=True, text=True, check=True, timeout=10)
+    previous = json.loads(option.stdout).get("bool")
+    if not isinstance(previous, bool):
+      raise ValueError("Could not read previous Hyprland auto-reload setting")
+    try:
+      set_autoreload(True)
+      yield
+    finally:
+      set_autoreload(previous)
+
+
 def apply(monitors, name, scale, config, mode=None):
+  plan(monitors, name, scale, mode)  # Reject unsafe/invalid requests before any IPC.
+  with without_autoreload():
+    return apply_guarded(monitors, name, scale, config, mode)
+
+
+def apply_guarded(monitors, name, scale, config, mode=None):
   displays = plan(monitors, name, scale, mode)
-  # Resolve symlinks and replace once: the file watcher must never reload a
-  # mixture of old positions and new scales. Stage before changing live state.
+  # Resolve symlinks and replace once while file watches are paused. Stage
+  # before changing live state; restore watches after cleanup and rollback.
   path = Path(config).resolve()
   staged = None
   changed_live = False

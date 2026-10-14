@@ -37,7 +37,12 @@ from pathlib import Path
 path = Path(os.environ["MONITORS_JSON"])
 if sys.argv[1] == "monitors":
   print(path.read_text())
+elif sys.argv[1] == "getoption":
+  print(json.dumps({"bool": False}))
 elif sys.argv[1] == "eval":
+  if "hl.monitor(" not in sys.argv[2]:
+    print("ok")
+    sys.exit(0)
   with open(os.environ["EVAL_LOG"], "a") as log:
     log.write(sys.argv[2] + "\n")
   displays = json.loads(path.read_text())
