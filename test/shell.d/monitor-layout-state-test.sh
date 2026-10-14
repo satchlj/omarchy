@@ -34,6 +34,13 @@ loader.apply()
     result = sp.run([lua, '-', str(root), td], input=code, text=True, capture_output=True, check=True)
     assert 'eDP-1:2' in result.stdout and 'GDK_SCALE:2' in result.stdout, result
     print('ok - actual Lua loader restores saved geometry/GDK from non-executable UTF8-framed data')
+    ordering = code.replace("loader.apply()", """package.loaded['default.hypr.require_all'] = {files=function() hl.monitor({output='eDP-1', scale='disabled-toggle'}) end}
+package.loaded['default.hypr.disabled-input-device'] = function() end
+package.loaded['default.hypr.workspace-layouts'] = {}
+dofile(arg[1] .. '/default/hypr/toggles.lua')""")
+    result = sp.run([lua, '-', str(root), td], input=ordering, text=True, capture_output=True, check=True)
+    assert result.stdout.index('eDP-1:2') < result.stdout.index('eDP-1:disabled-toggle')
+    print('ok - saved geometry loads before explicit disable/mirror/clamshell toggle rules')
     owner.write_bytes(b'-- owner edit after successful publication\n')
     result = sp.run([lua, '-', str(root), td], input=code, text=True, capture_output=True, check=True)
     assert result.stdout == '', result
