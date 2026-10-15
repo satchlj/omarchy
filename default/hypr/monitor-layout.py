@@ -338,6 +338,27 @@ def apply(monitors, name, scale, config, mode=None):
     return apply_guarded(monitors, name, scale, config, mode)
 
 
+def verify_layout(displays, settled=False):
+  stable = 0
+  for attempt in range(10):
+    readback = ipc("monitors", "-j", check=True)
+    actual = {m["name"]: m for m in json.loads(readback.stdout) if active(m)}
+    if set(actual) == {m["name"] for m in displays} and all(
+        actual[m["name"]]["width"] == m["width"] and actual[m["name"]]["height"] == m["height"]
+        and rect(actual[m["name"]]) == rect(m)
+        and abs(actual[m["name"]]["scale"] - m["scale"]) < 0.0001
+        and actual[m["name"]].get("transform", 0) == m.get("transform", 0)
+        and abs(actual[m["name"]]["refreshRate"] - m["refreshRate"]) < 1
+        for m in displays):
+      stable += 1
+      if stable >= (2 if settled else 1):
+        return
+    else:
+      stable = 0
+    time.sleep(0.05)
+  raise ValueError("Final live geometry differs from saved layout (concurrent reload or topology change); scale save cancelled")
+
+
 def apply_guarded(monitors, name, scale, config, mode=None):
   displays = plan(monitors, name, scale, mode)
   path = Path(config).resolve()
@@ -355,26 +376,24 @@ def apply_guarded(monitors, name, scale, config, mode=None):
   try:
     changed_live = True
     hypr_eval(lua_rules(displays))
-    for attempt in range(10):
-      readback = ipc("monitors", "-j", check=True)
-      actual = {m["name"]: m for m in json.loads(readback.stdout) if active(m)}
-      if all(m["name"] in actual and rect(actual[m["name"]]) == rect(m)
-             and abs(actual[m["name"]]["scale"] - m["scale"]) < 0.0001
-             and actual[m["name"]].get("transform", 0) == m.get("transform", 0)
-             and abs(actual[m["name"]]["refreshRate"] - m["refreshRate"]) < 1
-             for m in displays):
-        break
-      time.sleep(0.05)
-    else:
-      raise ValueError("Compositor geometry differs from requested layout")
+    verify_layout(displays)
     if path.read_bytes() != original:
       raise ValueError("Owner monitor config changed; scale save cancelled")
     # Only helper-owned state is replaced. An owner save at this very boundary
     # cannot be overwritten: the owner file is never a replacement destination.
     publishing = True
-    publish_state(saved, encode_state(original, displays, name))
+    committed = encode_state(original, displays, name)
+    publish_state(saved, committed)
     if path.read_bytes() != original:
       raise ValueError("Owner monitor config changed during publication; scale save cancelled")
+    # A reload already in progress can have consumed the previous record and
+    # undo the earlier live eval. The unwatched publication does not apply it.
+    # Observe AFTER publication, including a second matching sample to catch
+    # a previous-record reload completing between the first two observations.
+    # This is a bounded live witness, not serialization of future config edits.
+    verify_layout(displays, settled=True)
+    if saved.read_bytes() != committed or path.read_bytes() != original:
+      raise ValueError("Monitor state/config changed during final verification; scale save cancelled")
   except Exception:
     with finish_cleanup():
       recovery_failed = False
